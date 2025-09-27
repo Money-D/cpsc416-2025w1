@@ -73,13 +73,13 @@ func (c *Coordinator) heartbeatMonitor() {
 }
 
 func (c *Coordinator) checkExpiredTasks() {
-	curTIme := time.Now()
+	curTime := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, workerStatus := range c.workers {
 		if workerStatus.CurrentTask != nil {
-			workerMissing := curTIme.Sub(workerStatus.LastSeen) > 10*time.Second
-			isTaskExpired := curTIme.Sub(workerStatus.CurrentTask.StartTime) > 10*time.Second
+			workerMissing := curTime.Sub(workerStatus.LastSeen) > 10*time.Second
+			isTaskExpired := curTime.Sub(workerStatus.CurrentTask.StartTime) > 10*time.Second
 
 			if workerMissing || isTaskExpired {
 				expiredTask := workerStatus.CurrentTask
