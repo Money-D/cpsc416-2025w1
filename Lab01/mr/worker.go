@@ -22,13 +22,10 @@ type Workers struct {
 	Wid int
 }
 
-// use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
-	return int(h.Sum32() & 0x7fffffff)
-}
 
 // JobComplete RPC handler
 func (wk *Workers) JobComplete(args *ExampleArgs, reply *ExampleReply) error {
@@ -177,4 +174,16 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+func pingCoordinator(workerID int64) {
+	args := HeartbeatArgs{}
+	args.Wid = int(workerID)
+
+	reply := HeartbeatReply{}
+
+	ok := call("Coordinator.pingCoordinator", &args, &reply)
+	if !ok {
+		fmt.Printf("ping failed\n")
+	}
 }
