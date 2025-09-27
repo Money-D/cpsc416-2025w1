@@ -87,7 +87,6 @@ func (c *Coordinator) checkExpiredTasks() {
 				expiredTask.Completed = false
 
 				workerStatus.CurrentTask = nil
-				// Add task to map / reduce
 			}
 
 		}
