@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -93,7 +95,7 @@ func (wk *Workers) MapTask(fileName string, nReduce int,
 		return err
 	}
 	file.Close()
-	kva := mapf(fileName, string(content))
+	kvs := mapf(fileName, string(content))
 
 	encoders := make([]*json.Encoder, nReduce)
 	files := make([]*os.File, nReduce)
@@ -112,7 +114,7 @@ func (wk *Workers) MapTask(fileName string, nReduce int,
 		encoders[i] = json.NewEncoder(file)
 	}
 
-	for _, kv := range kva {
+	for _, kv := range kvs {
 		reduceTask := ihash(kv.Key) % nReduce
 		if err := encoders[reduceTask].Encode(&kv); err != nil {
 			log.Fatalf("Encode kv %v failed", kv)
@@ -122,6 +124,57 @@ func (wk *Workers) MapTask(fileName string, nReduce int,
 
 	for _, f := range files {
 		f.Close()
+	}
+
+	return nil
+}
+
+// Excute the Reduce Task
+func (wk *Workers) ReduceTask(reduceId int, intermediateFiles []string,
+	reducef func(string, []string) string) error {
+	kvs := make(map[string][]string)
+
+	for _, fileName := range intermediateFiles {
+		file, err := os.Open(fileName)
+		if err != nil {
+			log.Fatalf("Open file %v failed", fileName)
+			return err
+		}
+
+		dec := json.NewDecoder(file)
+
+		for {
+			var kv KeyValue
+			err := dec.Decode(&kv)
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				file.Close()
+				log.Fatalf("Decode kv %v failed", kv)
+				return err
+			}
+			kvs[kv.Key] = append(kvs[kv.Key], kv.Value)
+		}
+		file.Close()
+	}
+
+	keys := make([]string, 0, len(kvs))
+	for k := range kvs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	outputFile, err := os.Create(fmt.Sprintf("mr-out-%d", reduceId))
+	if err != nil {
+		log.Fatalf("Create output file for reduce task %d failed", reduceId)
+		return err
+	}
+	defer outputFile.Close()
+
+	for _, k := range keys {
+		output := reducef(k, kvs[k])
+		fmt.Fprintf(outputFile, "%v %v\n", k, output)
 	}
 
 	return nil
@@ -145,11 +198,18 @@ func Worker(mapf func(string, string) []KeyValue,
 			fmt.Printf("Worker: %d | Map Task Input File: %s", wk.Wid, reply.FileName)
 			err := wk.MapTask(reply.FileName, reply.NReduce, mapf)
 			if err != nil {
-				// what does worker do when failing the task?
+				fmt.Printf("Worker %d failed Map Task: %v", wk.Wid, err)
+				return
 			}
 		case "reduce":
+			fmt.Printf("Worker: %d | Reduce Task ID: %d", wk.Wid, reply.ReduceId)
+			err := wk.ReduceTask(reply.ReduceId, reply.IntermediateFiles, reducef)
+			if err != nil {
+				fmt.Printf("Worker %d failed Reduce Task: %v", wk.Wid, err)
+				return
+			}
 		case "wait":
-			fmt.Printf("Worker %d no incoming task, waiting \n", wk.Wid)
+			fmt.Printf("Worker %d has no incoming task, waiting \n", wk.Wid)
 			time.Sleep(time.Second)
 		case "exit":
 			fmt.Printf("Worker: %d shutting down \n", wk.Wid)
