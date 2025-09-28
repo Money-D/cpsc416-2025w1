@@ -131,6 +131,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	wk.server()
 
 	wk.RegisterWorker()
+	go continuousPing(wk.Wid) // Separate goroutine for ping
 
 	for {
 		reply := wk.RequestTask()
@@ -176,9 +177,16 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	return false
 }
 
-func pingCoordinator(workerID int64) {
+func continuousPing(workerID int) {
+	for {
+		pingCoordinator(workerID)
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func pingCoordinator(workerID int) {
 	args := HeartbeatArgs{}
-	args.Wid = int(workerID)
+	args.Wid = workerID
 
 	reply := HeartbeatReply{}
 
