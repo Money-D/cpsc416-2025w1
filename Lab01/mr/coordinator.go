@@ -56,17 +56,13 @@ func (c *Coordinator) RegisterRPC(args *RegisterArgs, reply *RegisterReply) erro
 	c.workers[newWorkerId] = status
 	reply.Wid = newWorkerId
 
-	fmt.Printf("Register: worker %v registered\n", newWorkerId)
-	fmt.Printf("Current workers: %v\n", c.workers)
 	return nil
 }
 
 func (c *Coordinator) RequestTask(args *TaskRequestArgs, reply *TaskRequestReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	fmt.Printf("RequestTask: worker %v requesting task\n", args.Wid)
 	// TODO what if you receive task comple from crashed worker?
-	// TODO: add task to workers current task
 	worker, exists := c.workers[args.Wid]
 	if !exists {
 		return fmt.Errorf("Worker %v not found", args.Wid)
@@ -84,13 +80,11 @@ func (c *Coordinator) RequestTask(args *TaskRequestArgs, reply *TaskRequestReply
 			task.Wid = args.Wid
 
 			worker.CurrentTask = task
-			fmt.Printf("Assigning map task for file %v to worker %v\n", task.FileName, args.Wid)
 			return nil
 		}
 	}
 
 	if !c.mapPhaseDone() {
-		fmt.Printf("Map tasks not yet done, instructing worker %v to wait\n", args.Wid)
 		reply.Type = "wait"
 		return nil
 	}
@@ -107,19 +101,16 @@ func (c *Coordinator) RequestTask(args *TaskRequestArgs, reply *TaskRequestReply
 			task.Wid = args.Wid
 
 			worker.CurrentTask = task
-			fmt.Printf("Assigning reduce task %v to worker %v\n", task.ReduceId, args.Wid)
 			return nil
 		}
 	}
 
 	if !c.reducePhaseDone() {
-		fmt.Printf("Reduce tasks not yet done, instructing worker %v to wait\n", args.Wid)
 		reply.Type = "wait"
 		return nil
 	}
 
 	reply.Type = "exit"
-	fmt.Printf("Job done, instructing worker %v to exit\n", args.Wid)
 	return nil
 }
 
@@ -144,7 +135,6 @@ func (c *Coordinator) TaskComplete(args *TaskCompleteArgs, reply *TaskCompleteRe
 	worker.CurrentTask = nil
 	worker.LastSeen = time.Now()
 
-	fmt.Printf("TaskComplete: Worker %v completed task %v\n", workerId, task)
 	return nil
 }
 
@@ -183,7 +173,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		nReduce:      nReduce,
 	}
 
-	fmt.Print("Coordinator started\n")
 	c.initMapTasks(files)
 	c.initReduceTasks(files, nReduce)
 	c.server()

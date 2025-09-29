@@ -33,15 +33,16 @@ func ihash(key string) int {
 
 // Send RPC to register worker and get Wid from
 // coordinator
-func (wk *Workers) RegisterWorker() {
+func (wk *Workers) RegisterWorker() error {
 	args := RegisterArgs{}
 	reply := RegisterReply{}
 	ok := call("Coordinator.RegisterRPC", &args, &reply)
 	if ok {
 		wk.Wid = reply.Wid
 	} else {
-		fmt.Printf("Register Worker failed\n")
+		return fmt.Errorf("RegisterWorker failed")
 	}
+	return nil
 }
 
 // Send RPC to request a task from coordinator
@@ -55,21 +56,20 @@ func (wk *Workers) RequestTask() *TaskRequestReply {
 	if ok {
 		return reply
 	} else {
-		fmt.Println("Request task failed")
 		return nil
 	}
 }
 
-func TaskComplete(wid int) {
+func TaskComplete(wid int) error {
 	args := TaskCompleteArgs{}
 	args.Wid = wid
 	reply := TaskCompleteReply{}
 
 	ok := call("Coordinator.TaskComplete", &args, &reply)
 	if ok {
-		return
+		return nil
 	} else {
-		fmt.Printf("Worker %d report task complete failed\n", wid)
+		return fmt.Errorf("Task complete RPC failed")
 	}
 }
 
@@ -179,7 +179,9 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	wk := new(Workers)
 
-	wk.RegisterWorker()
+	if err := wk.RegisterWorker(); err != nil {
+		return
+	}
 
 	for {
 		reply := wk.RequestTask()
@@ -188,26 +190,26 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 		switch reply.Type {
 		case "map":
-			fmt.Printf("Worker: %d | Map Task Input File: %s", wk.Wid, reply.FileName)
 			err := wk.MapTask(reply.FileName, reply.NReduce, mapf)
 			if err != nil {
-				fmt.Printf("Worker %d failed Map Task: %v", wk.Wid, err)
 				return
 			}
-			TaskComplete(wk.Wid)
+			err = TaskComplete(wk.Wid)
+			if err != nil {
+				return
+			}
 		case "reduce":
-			fmt.Printf("Worker: %d | Reduce Task ID: %d\n", wk.Wid, reply.ReduceId)
 			err := wk.ReduceTask(reply.ReduceId, reply.IntermediateFiles, reducef)
 			if err != nil {
-				fmt.Printf("Worker %d failed Reduce Task: %v\n", wk.Wid, err)
 				return
 			}
-			TaskComplete(wk.Wid)
+			err = TaskComplete(wk.Wid)
+			if err != nil {
+				return
+			}
 		case "wait":
-			fmt.Printf("Worker %d has no incoming task, waiting \n", wk.Wid)
 			time.Sleep(time.Second)
 		case "exit":
-			fmt.Printf("Worker: %d shutting down \n", wk.Wid)
 			return
 		}
 	}
