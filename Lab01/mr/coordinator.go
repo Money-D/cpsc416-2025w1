@@ -1,31 +1,150 @@
 package mr
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
-type Coordinator struct {
-	// Your definitions here.
-	mu            sync.Mutex
-	workerCounter int64
-	workers       map[int64]*WorkerStatus
-	mapTasks      map[string]*Task
-	reduceTasks   map[int]*Task
+type Task struct {
+	Type              string   // "map" or "reduce"
+	FileName          string   // only for map tasks
+	NReduce           int      // only for map tasks
+	IntermediateFiles []string // only for reduce tasks
+	ReduceId          int      // only for reduce tasks
+	StartTime         time.Time
+	InProgress        bool
+	Done              bool
+	Wid               int // worker id
 }
 
-// Your code here -- RPC handlers for the worker to call.
+type WorkerStatus struct {
+	Alive       bool
+	CurrentTask *Task
+	LastSeen    time.Time
+}
+type Coordinator struct {
+	mu           sync.Mutex
+	nextWorkerId int
+	workers      map[int]*WorkerStatus
+	mapTasks     map[string]*Task
+	reduceTasks  map[int]*Task
+	nReduce      int
+}
 
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
+// TODO Your code here -- RPC handlers for the worker to call.
+
+func (c *Coordinator) RegisterRPC(args *RegisterArgs, reply *RegisterReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// assign worker id
+	newWorkerId := c.nextWorkerId
+	c.nextWorkerId++
+
+	status := &WorkerStatus{
+		Alive:       true,
+		CurrentTask: nil,
+		LastSeen:    time.Now(),
+	}
+	c.workers[newWorkerId] = status
+	reply.Wid = newWorkerId
+
+	fmt.Printf("Register: worker %v registered\n", newWorkerId)
+	fmt.Printf("Current workers: %v\n", c.workers)
+	return nil
+}
+
+func (c *Coordinator) RequestTask(args *TaskRequestArgs, reply *TaskRequestReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fmt.Printf("RequestTask: worker %v requesting task\n", args.Wid)
+	// TODO what if you receive task comple from crashed worker?
+	// TODO: add task to workers current task
+	worker, exists := c.workers[args.Wid]
+	if !exists {
+		return fmt.Errorf("Worker %v not found", args.Wid)
+	}
+
+	// Check if there are any available map tasks
+	for _, task := range c.mapTasks {
+		if !task.Done && !task.InProgress {
+			reply.Type = "map"
+			reply.FileName = task.FileName
+			reply.NReduce = c.nReduce
+
+			task.InProgress = true
+			task.StartTime = time.Now()
+			task.Wid = args.Wid
+
+			worker.CurrentTask = task
+			fmt.Printf("Assigning map task for file %v to worker %v\n", task.FileName, args.Wid)
+			return nil
+		}
+	}
+
+	if !c.mapPhaseDone() {
+		fmt.Printf("Map tasks not yet done, instructing worker %v to wait\n", args.Wid)
+		reply.Type = "wait"
+		return nil
+	}
+
+	// Check for reduce tasks
+	for _, task := range c.reduceTasks {
+		if !task.Done && !task.InProgress {
+			reply.Type = "reduce"
+			reply.ReduceId = task.ReduceId
+			reply.IntermediateFiles = task.IntermediateFiles
+
+			task.InProgress = true
+			task.StartTime = time.Now()
+			task.Wid = args.Wid
+
+			worker.CurrentTask = task
+			fmt.Printf("Assigning reduce task %v to worker %v\n", task.ReduceId, args.Wid)
+			return nil
+		}
+	}
+
+	if !c.reducePhaseDone() {
+		fmt.Printf("Reduce tasks not yet done, instructing worker %v to wait\n", args.Wid)
+		reply.Type = "wait"
+		return nil
+	}
+
+	reply.Type = "exit"
+	fmt.Printf("Job done, instructing worker %v to exit\n", args.Wid)
+	return nil
+}
+
+func (c *Coordinator) TaskComplete(args *TaskCompleteArgs, reply *TaskCompleteReply) error {
+	// TODO handle slow or crashed worker
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	workerId := args.Wid
+	worker, exists := c.workers[workerId]
+	if !exists {
+		return fmt.Errorf("Worker %v not found", workerId)
+	}
+
+	task := worker.CurrentTask
+	if task == nil {
+		return fmt.Errorf("Worker %v has no current task", workerId)
+	}
+
+	task.Done = true
+	task.InProgress = false
+	worker.CurrentTask = nil
+	worker.LastSeen = time.Now()
+
+	fmt.Printf("TaskComplete: Worker %v completed task %v\n", workerId, task)
 	return nil
 }
 
@@ -46,22 +165,32 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := false
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	// Your code here.
-
-	return ret
+	return c.reducePhaseDone()
 }
 
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{}
+	c := Coordinator{
+		workers:      make(map[int]*WorkerStatus),
+		mapTasks:     make(map[string]*Task),
+		reduceTasks:  make(map[int]*Task),
+		nextWorkerId: 1,
+		nReduce:      nReduce,
+	}
 
-	// Your code here.
-
+	fmt.Print("Coordinator started\n")
+	c.initMapTasks(files)
+	c.initReduceTasks(files, nReduce)
 	c.server()
+
+	go c.mapTasksMonitor()
+	go c.reduceTasksMonitor()
+	go c.heartbeatMonitor()
 	return &c
 }
 
@@ -84,11 +213,21 @@ func (c *Coordinator) checkExpiredTasks() {
 			if workerMissing || isTaskExpired {
 				expiredTask := workerStatus.CurrentTask
 				expiredTask.StartTime = time.Time{}
-				expiredTask.Completed = false
+				expiredTask.InProgress = false
+				expiredTask.Done = false
 
 				workerStatus.CurrentTask = nil
 			}
+		}
+	}
+}
 
+func (c *Coordinator) initMapTasks(files []string) {
+	for _, filename := range files {
+		c.mapTasks[filename] = &Task{
+			Type:     "map",
+			FileName: filename,
+			Done:     false,
 		}
 	}
 }
@@ -96,9 +235,89 @@ func (c *Coordinator) checkExpiredTasks() {
 func (c *Coordinator) pingCoordinator(args *HeartbeatArgs, reply *HeartbeatReply) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	workerStatus, exists := c.workers[int64(args.Wid)]
+	workerStatus, exists := c.workers[args.Wid]
 	if exists {
 		workerStatus.LastSeen = time.Now()
 	}
 	return
+}
+
+func (c *Coordinator) initReduceTasks(files []string, nReduce int) {
+	for i := range nReduce {
+		interFiles := []string{}
+		for _, filename := range files {
+			base := filepath.Base(filename)
+			interFileName := fmt.Sprintf("mr-%s-%d", base, i)
+			interFiles = append(interFiles, interFileName)
+		}
+		c.reduceTasks[i] = &Task{
+			Type:              "reduce",
+			ReduceId:          i,
+			Done:              false,
+			IntermediateFiles: interFiles,
+		}
+	}
+}
+
+func (c *Coordinator) mapTasksMonitor() {
+	for {
+		c.mu.Lock()
+		for _, task := range c.mapTasks {
+
+			if task.InProgress && !task.Done {
+				currTime := time.Now()
+				if currTime.Sub(task.StartTime) > 10*time.Second {
+					task.InProgress = false
+					task.StartTime = time.Time{}
+					worker, exists := c.workers[task.Wid]
+					if exists {
+						worker.CurrentTask = nil
+					}
+				}
+			}
+		}
+		c.mu.Unlock()
+		time.Sleep(time.Second * 1)
+
+	}
+}
+
+func (c *Coordinator) reduceTasksMonitor() {
+	for {
+		c.mu.Lock()
+		for _, task := range c.reduceTasks {
+			if task.InProgress && !task.Done {
+				currTime := time.Now()
+				if currTime.Sub(task.StartTime) > 10*time.Second {
+					task.InProgress = false
+					task.StartTime = time.Time{}
+					worker, exists := c.workers[task.Wid]
+					if exists {
+						worker.CurrentTask = nil
+					}
+				}
+			}
+		}
+		c.mu.Unlock()
+		time.Sleep(time.Second * 1)
+
+	}
+}
+
+func (c *Coordinator) mapPhaseDone() bool {
+	for _, task := range c.mapTasks {
+		if !task.Done {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Coordinator) reducePhaseDone() bool {
+	for _, task := range c.reduceTasks {
+		if !task.Done {
+			return false
+		}
+	}
+	return true
 }

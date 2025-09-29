@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 )
@@ -50,12 +51,25 @@ func (wk *Workers) RequestTask() *TaskRequestReply {
 
 	reply := &TaskRequestReply{}
 
-	ok := call("Coordinator.TaskRPC", &args, &reply)
+	ok := call("Coordinator.RequestTask", &args, &reply)
 	if ok {
 		return reply
 	} else {
 		fmt.Println("Request task failed")
 		return nil
+	}
+}
+
+func TaskComplete(wid int) {
+	args := TaskCompleteArgs{}
+	args.Wid = wid
+	reply := TaskCompleteReply{}
+
+	ok := call("Coordinator.TaskComplete", &args, &reply)
+	if ok {
+		return
+	} else {
+		fmt.Printf("Worker %d report task complete failed\n", wid)
 	}
 }
 
@@ -80,7 +94,8 @@ func (wk *Workers) MapTask(fileName string, nReduce int,
 	files := make([]*os.File, nReduce)
 
 	for i := range nReduce {
-		intermediateName := fmt.Sprintf("mr-%s-%d", fileName, i)
+		base := filepath.Base(fileName)
+		intermediateName := fmt.Sprintf("mr-%s-%d", base, i)
 
 		file, err := os.Create(intermediateName)
 		if err != nil {
@@ -179,13 +194,15 @@ func Worker(mapf func(string, string) []KeyValue,
 				fmt.Printf("Worker %d failed Map Task: %v", wk.Wid, err)
 				return
 			}
+			TaskComplete(wk.Wid)
 		case "reduce":
-			fmt.Printf("Worker: %d | Reduce Task ID: %d", wk.Wid, reply.ReduceId)
+			fmt.Printf("Worker: %d | Reduce Task ID: %d\n", wk.Wid, reply.ReduceId)
 			err := wk.ReduceTask(reply.ReduceId, reply.IntermediateFiles, reducef)
 			if err != nil {
-				fmt.Printf("Worker %d failed Reduce Task: %v", wk.Wid, err)
+				fmt.Printf("Worker %d failed Reduce Task: %v\n", wk.Wid, err)
 				return
 			}
+			TaskComplete(wk.Wid)
 		case "wait":
 			fmt.Printf("Worker %d has no incoming task, waiting \n", wk.Wid)
 			time.Sleep(time.Second)
