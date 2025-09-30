@@ -41,10 +41,12 @@ type TaskRequestReply struct {
 	NReduce           int      // only for map tasks
 	ReduceId          int      // only for reduce tasks
 	IntermediateFiles []string // only for reduce tasks
+	MapId             int      // only for map tasks
 }
 
 type TaskCompleteArgs struct {
-	Wid int
+	Wid            int
+	InterFileNames []string
 }
 type TaskCompleteReply struct {
 }
