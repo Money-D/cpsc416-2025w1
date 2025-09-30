@@ -8,6 +8,8 @@ import (
 	"net/rpc"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -36,6 +38,7 @@ type Coordinator struct {
 	mapTasks     map[string]*Task
 	reduceTasks  map[int]*Task
 	nReduce      int
+	nextMapId    int
 }
 
 // TODO Your code here -- RPC handlers for the worker to call.
@@ -74,6 +77,8 @@ func (c *Coordinator) RequestTask(args *TaskRequestArgs, reply *TaskRequestReply
 			reply.Type = "map"
 			reply.FileName = task.FileName
 			reply.NReduce = c.nReduce
+			reply.MapId = c.nextMapId
+			c.nextMapId++
 
 			task.InProgress = true
 			task.StartTime = time.Now()
@@ -127,9 +132,31 @@ func (c *Coordinator) TaskComplete(args *TaskCompleteArgs, reply *TaskCompleteRe
 
 	task := worker.CurrentTask
 	if task == nil {
+		for _, fname := range args.InterFileNames {
+			if err := os.Remove(fname); err != nil {
+				fmt.Printf("Failed to Delete %s: %v\n", fname, err)
+			}
+		}
 		return nil
 	}
 	fmt.Printf("task complete\n")
+
+	if task.Type == "map" {
+		for _, fname := range args.InterFileNames {
+			parts := strings.Split(filepath.Base(fname), "-")
+			reduceId, err := strconv.Atoi(parts[len(parts)-1])
+			if err != nil || reduceId < 0 || reduceId >= c.nReduce {
+				return fmt.Errorf("bad intermediate filename %q: %v", fname, err)
+			}
+			c.reduceTasks[reduceId].IntermediateFiles = append(c.reduceTasks[reduceId].IntermediateFiles, fname)
+		}
+	} else {
+		for _, fname := range args.InterFileNames {
+			parts := strings.Split(filepath.Base(fname), "_")
+			finalOutputFname := parts[0]
+			os.Rename(fname, finalOutputFname)
+		}
+	}
 
 	task.Done = true
 	task.InProgress = false
@@ -172,6 +199,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		reduceTasks:  make(map[int]*Task),
 		nextWorkerId: 1,
 		nReduce:      nReduce,
+		nextMapId:    0,
 	}
 
 	c.initMapTasks(files)
@@ -236,11 +264,6 @@ func (c *Coordinator) PingCoordinator(args *HeartbeatArgs, reply *HeartbeatReply
 func (c *Coordinator) initReduceTasks(files []string, nReduce int) {
 	for i := range nReduce {
 		interFiles := []string{}
-		for _, filename := range files {
-			base := filepath.Base(filename)
-			interFileName := fmt.Sprintf("mr-%s-%d", base, i)
-			interFiles = append(interFiles, interFileName)
-		}
 		c.reduceTasks[i] = &Task{
 			Type:              "reduce",
 			ReduceId:          i,
