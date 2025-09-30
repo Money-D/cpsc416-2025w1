@@ -156,6 +156,12 @@ func (c *Coordinator) TaskComplete(args *TaskCompleteArgs, reply *TaskCompleteRe
 			finalOutputFname := parts[0]
 			os.Rename(fname, filepath.Join(filepath.Dir(fname), finalOutputFname))
 		}
+
+		for _, interFname := range task.IntermediateFiles {
+			if err := os.Remove(interFname); err != nil {
+				fmt.Printf("Failed to Delete During Cleanup %s: %v\n", interFname, err)
+			}
+		}
 	}
 
 	task.Done = true
