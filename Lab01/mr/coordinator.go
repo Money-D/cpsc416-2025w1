@@ -127,8 +127,9 @@ func (c *Coordinator) TaskComplete(args *TaskCompleteArgs, reply *TaskCompleteRe
 
 	task := worker.CurrentTask
 	if task == nil {
-		return fmt.Errorf("Worker %v has no current task", workerId)
+		return nil
 	}
+	fmt.Printf("task complete\n")
 
 	task.Done = true
 	task.InProgress = false
@@ -177,8 +178,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.initReduceTasks(files, nReduce)
 	c.server()
 
-	go c.mapTasksMonitor()
-	go c.reduceTasksMonitor()
+	// go c.mapTasksMonitor()
+	// go c.reduceTasksMonitor()
 	go c.heartbeatMonitor()
 	return &c
 }
@@ -200,6 +201,7 @@ func (c *Coordinator) checkExpiredTasks() {
 			isTaskExpired := curTime.Sub(workerStatus.CurrentTask.StartTime) > 10*time.Second
 
 			if workerMissing || isTaskExpired {
+				fmt.Printf("expiring task\n")
 				expiredTask := workerStatus.CurrentTask
 				expiredTask.StartTime = time.Time{}
 				expiredTask.InProgress = false
@@ -221,14 +223,14 @@ func (c *Coordinator) initMapTasks(files []string) {
 	}
 }
 
-func (c *Coordinator) pingCoordinator(args *HeartbeatArgs, reply *HeartbeatReply) {
+func (c *Coordinator) PingCoordinator(args *HeartbeatArgs, reply *HeartbeatReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	workerStatus, exists := c.workers[args.Wid]
 	if exists {
 		workerStatus.LastSeen = time.Now()
 	}
-	return
+	return nil
 }
 
 func (c *Coordinator) initReduceTasks(files []string, nReduce int) {

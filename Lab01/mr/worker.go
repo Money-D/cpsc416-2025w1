@@ -182,6 +182,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	if err := wk.RegisterWorker(); err != nil {
 		return
 	}
+	go continuousPing(wk.Wid)
 
 	for {
 		reply := wk.RequestTask()
@@ -234,4 +235,23 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+func continuousPing(workerID int) {
+	for {
+		pingCoordinator(workerID)
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func pingCoordinator(workerID int) {
+	args := HeartbeatArgs{}
+	args.Wid = workerID
+
+	reply := HeartbeatReply{}
+
+	ok := call("Coordinator.PingCoordinator", &args, &reply)
+	if !ok {
+		fmt.Printf("ping failed\n")
+	}
 }
