@@ -139,7 +139,6 @@ func (c *Coordinator) TaskComplete(args *TaskCompleteArgs, reply *TaskCompleteRe
 		}
 		return nil
 	}
-	fmt.Printf("task complete\n")
 
 	if task.Type == "map" {
 		for _, fname := range args.InterFileNames {
@@ -212,8 +211,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.initReduceTasks(files, nReduce)
 	c.server()
 
-	// go c.mapTasksMonitor()
-	// go c.reduceTasksMonitor()
 	go c.heartbeatMonitor()
 	return &c
 }
@@ -235,7 +232,6 @@ func (c *Coordinator) checkExpiredTasks() {
 			isTaskExpired := curTime.Sub(workerStatus.CurrentTask.StartTime) > 10*time.Second
 
 			if workerMissing || isTaskExpired {
-				fmt.Printf("expiring task\n")
 				expiredTask := workerStatus.CurrentTask
 				expiredTask.StartTime = time.Time{}
 				expiredTask.InProgress = false
@@ -276,51 +272,6 @@ func (c *Coordinator) initReduceTasks(files []string, nReduce int) {
 			Done:              false,
 			IntermediateFiles: interFiles,
 		}
-	}
-}
-
-func (c *Coordinator) mapTasksMonitor() {
-	for {
-		c.mu.Lock()
-		for _, task := range c.mapTasks {
-
-			if task.InProgress && !task.Done {
-				currTime := time.Now()
-				if currTime.Sub(task.StartTime) > 10*time.Second {
-					task.InProgress = false
-					task.StartTime = time.Time{}
-					worker, exists := c.workers[task.Wid]
-					if exists {
-						worker.CurrentTask = nil
-					}
-				}
-			}
-		}
-		c.mu.Unlock()
-		time.Sleep(time.Second * 1)
-
-	}
-}
-
-func (c *Coordinator) reduceTasksMonitor() {
-	for {
-		c.mu.Lock()
-		for _, task := range c.reduceTasks {
-			if task.InProgress && !task.Done {
-				currTime := time.Now()
-				if currTime.Sub(task.StartTime) > 10*time.Second {
-					task.InProgress = false
-					task.StartTime = time.Time{}
-					worker, exists := c.workers[task.Wid]
-					if exists {
-						worker.CurrentTask = nil
-					}
-				}
-			}
-		}
-		c.mu.Unlock()
-		time.Sleep(time.Second * 1)
-
 	}
 }
 
