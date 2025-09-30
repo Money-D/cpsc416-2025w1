@@ -154,7 +154,7 @@ func (c *Coordinator) TaskComplete(args *TaskCompleteArgs, reply *TaskCompleteRe
 		for _, fname := range args.InterFileNames {
 			parts := strings.Split(filepath.Base(fname), "_")
 			finalOutputFname := parts[0]
-			os.Rename(fname, finalOutputFname)
+			os.Rename(fname, filepath.Join(filepath.Dir(fname), finalOutputFname))
 		}
 	}
 
