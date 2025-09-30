@@ -77,17 +77,11 @@ func TaskComplete(wid int, fileNames []string) error {
 func (wk *Workers) MapTask(fileName string, nReduce int, mapId int,
 	mapf func(string, string) []KeyValue) ([]string, error) {
 	// From mrsequential.go
-	file, err := os.Open(fileName)
-	if err != nil {
-		log.Fatalf("Open file %v failed", fileName)
-		return nil, err
-	}
 	content, err := os.ReadFile(fileName)
 	if err != nil {
 		log.Fatalf("Read file %v failed:", fileName)
 		return nil, err
 	}
-	file.Close()
 	kvs := mapf(fileName, string(content))
 
 	encoders := make([]*json.Encoder, nReduce)
@@ -102,7 +96,6 @@ func (wk *Workers) MapTask(fileName string, nReduce int, mapId int,
 			log.Fatalf("Create file %v failed", intermediateName)
 			return nil, err
 		}
-		defer file.Close()
 
 		files[i] = file
 		encoders[i] = json.NewEncoder(file)
