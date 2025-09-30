@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/rpc"
 	"os"
-	"path/filepath"
 	"sort"
 	"time"
 )
@@ -60,9 +59,10 @@ func (wk *Workers) RequestTask() *TaskRequestReply {
 	}
 }
 
-func TaskComplete(wid int) error {
+func TaskComplete(wid int, fileNames []string) error {
 	args := TaskCompleteArgs{}
 	args.Wid = wid
+	args.InterFileNames = fileNames
 	reply := TaskCompleteReply{}
 
 	ok := call("Coordinator.TaskComplete", &args, &reply)
@@ -74,45 +74,46 @@ func TaskComplete(wid int) error {
 }
 
 // Execute the Map Task
-func (wk *Workers) MapTask(fileName string, nReduce int,
-	mapf func(string, string) []KeyValue) error {
+func (wk *Workers) MapTask(fileName string, nReduce int, mapId int,
+	mapf func(string, string) []KeyValue) ([]string, error) {
 	// From mrsequential.go
 	file, err := os.Open(fileName)
 	if err != nil {
 		log.Fatalf("Open file %v failed", fileName)
-		return err
+		return nil, err
 	}
 	content, err := os.ReadFile(fileName)
 	if err != nil {
 		log.Fatalf("Read file %v failed:", fileName)
-		return err
+		return nil, err
 	}
 	file.Close()
 	kvs := mapf(fileName, string(content))
 
 	encoders := make([]*json.Encoder, nReduce)
 	files := make([]*os.File, nReduce)
+	names := make([]string, nReduce)
 
 	for i := range nReduce {
-		base := filepath.Base(fileName)
-		intermediateName := fmt.Sprintf("mr-%s-%d", base, i)
+		intermediateName := fmt.Sprintf("mr-%d-%d", mapId, i)
 
 		file, err := os.Create(intermediateName)
 		if err != nil {
 			log.Fatalf("Create file %v failed", intermediateName)
-			return err
+			return nil, err
 		}
 		defer file.Close()
 
 		files[i] = file
 		encoders[i] = json.NewEncoder(file)
+		names[i] = intermediateName
 	}
 
 	for _, kv := range kvs {
 		reduceTask := ihash(kv.Key) % nReduce
 		if err := encoders[reduceTask].Encode(&kv); err != nil {
 			log.Fatalf("Encode kv %v failed", kv)
-			return err
+			return nil, err
 		}
 	}
 
@@ -120,19 +121,19 @@ func (wk *Workers) MapTask(fileName string, nReduce int,
 		f.Close()
 	}
 
-	return nil
+	return names, nil
 }
 
 // Excute the Reduce Task
 func (wk *Workers) ReduceTask(reduceId int, intermediateFiles []string,
-	reducef func(string, []string) string) error {
+	reducef func(string, []string) string) (string, error) {
 	kvs := make(map[string][]string)
 
 	for _, fileName := range intermediateFiles {
 		file, err := os.Open(fileName)
 		if err != nil {
 			log.Fatalf("Open file %v failed", fileName)
-			return err
+			return "", err
 		}
 
 		dec := json.NewDecoder(file)
@@ -146,7 +147,7 @@ func (wk *Workers) ReduceTask(reduceId int, intermediateFiles []string,
 				}
 				file.Close()
 				log.Fatalf("Decode kv %v failed", kv)
-				return err
+				return "", err
 			}
 			kvs[kv.Key] = append(kvs[kv.Key], kv.Value)
 		}
@@ -159,10 +160,11 @@ func (wk *Workers) ReduceTask(reduceId int, intermediateFiles []string,
 	}
 	sort.Strings(keys)
 
-	outputFile, err := os.Create(fmt.Sprintf("mr-out-%d", reduceId))
+	intermediateName := fmt.Sprintf("mr-out-%d_%d", reduceId, wk.Wid)
+	outputFile, err := os.Create(intermediateName)
 	if err != nil {
 		log.Fatalf("Create output file for reduce task %d failed", reduceId)
-		return err
+		return "", err
 	}
 	defer outputFile.Close()
 
@@ -171,7 +173,7 @@ func (wk *Workers) ReduceTask(reduceId int, intermediateFiles []string,
 		fmt.Fprintf(outputFile, "%v %v\n", k, output)
 	}
 
-	return nil
+	return intermediateName, nil
 }
 
 // main/mrworker.go calls this function.
@@ -191,20 +193,20 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 		switch reply.Type {
 		case "map":
-			err := wk.MapTask(reply.FileName, reply.NReduce, mapf)
+			names, err := wk.MapTask(reply.FileName, reply.NReduce, reply.MapId, mapf)
 			if err != nil {
 				return
 			}
-			err = TaskComplete(wk.Wid)
+			err = TaskComplete(wk.Wid, names)
 			if err != nil {
 				return
 			}
 		case "reduce":
-			err := wk.ReduceTask(reply.ReduceId, reply.IntermediateFiles, reducef)
+			name, err := wk.ReduceTask(reply.ReduceId, reply.IntermediateFiles, reducef)
 			if err != nil {
 				return
 			}
-			err = TaskComplete(wk.Wid)
+			err = TaskComplete(wk.Wid, []string{name})
 			if err != nil {
 				return
 			}
