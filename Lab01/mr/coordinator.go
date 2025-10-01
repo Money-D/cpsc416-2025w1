@@ -65,7 +65,7 @@ func (c *Coordinator) RegisterRPC(args *RegisterArgs, reply *RegisterReply) erro
 func (c *Coordinator) RequestTask(args *TaskRequestArgs, reply *TaskRequestReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// TODO what if you receive task comple from crashed worker?
+
 	worker, exists := c.workers[args.Wid]
 	if !exists {
 		return fmt.Errorf("Worker %v not found", args.Wid)
@@ -120,7 +120,6 @@ func (c *Coordinator) RequestTask(args *TaskRequestArgs, reply *TaskRequestReply
 }
 
 func (c *Coordinator) TaskComplete(args *TaskCompleteArgs, reply *TaskCompleteReply) error {
-	// TODO handle slow or crashed worker
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -208,7 +207,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 
 	c.initMapTasks(files)
-	c.initReduceTasks(files, nReduce)
+	c.initReduceTasks(nReduce)
 	c.server()
 
 	go c.heartbeatMonitor()
@@ -263,7 +262,7 @@ func (c *Coordinator) PingCoordinator(args *HeartbeatArgs, reply *HeartbeatReply
 	return nil
 }
 
-func (c *Coordinator) initReduceTasks(files []string, nReduce int) {
+func (c *Coordinator) initReduceTasks(nReduce int) {
 	for i := range nReduce {
 		interFiles := []string{}
 		c.reduceTasks[i] = &Task{
